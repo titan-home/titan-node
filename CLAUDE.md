@@ -40,3 +40,5 @@ The commands are settled as the code arrives.
    the stack passes.
 4. If the Docker access code changed: its tests pass and the change is called
    out in the commit message.
+5. If Markdown or the `shared/` pointer changed:
+   `python3 shared/scripts/check_links.py .` prints nothing.
