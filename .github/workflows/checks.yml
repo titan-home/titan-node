@@ -1,0 +1,23 @@
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository with shared/
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          fetch-depth: 0 # full history, also for shared/, so the ancestor check sees it
+      - name: Check that shared/ points to a commit on titan-shared's master
+        run: |
+          git -C shared fetch origin master
+          git -C shared merge-base --is-ancestor HEAD origin/master
