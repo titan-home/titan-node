@@ -1,0 +1,10 @@
+# Dependency updates (decision #95): every new version waits 14 days,
+# security updates come at once.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
