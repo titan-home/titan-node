@@ -21,3 +21,5 @@ jobs:
         run: |
           git -C shared fetch origin master
           git -C shared merge-base --is-ancestor HEAD origin/master
+      - name: Check relative links
+        run: python3 shared/scripts/check_links.py .
