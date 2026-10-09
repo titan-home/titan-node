@@ -1,7 +1,8 @@
 # The node's stack (decisions #1, #17, #19), installed into /opt/titan
 # (decision #148). Beside this file in the node folder: `.env` names the
-# backend's images, `nginx/` holds the nginx config, `tls/` the certificate
-# and `secrets/` the secrets. Only nginx is reachable from outside, on 443.
+# images and the node folder, `nginx/` holds the nginx config, `tls/` the
+# certificate and `secrets/` the secrets. Only nginx is reachable from
+# outside, on 443.
 
 name: titan
 
@@ -41,6 +42,9 @@ services:
     # The images come from `.env`: the controller writes them from the
     # release manifest, pinned by digest; the node test writes local tags.
     image: ${TITAN_API_IMAGE:?}
+    # Group 10001 is the group of the controller's socket, so the api can
+    # call the controller.
+    user: "10001:10001"
     read_only: true
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
@@ -55,11 +59,17 @@ services:
       # nginx alone, not the whole network: no other container can name a
       # client address, which the password-guessing limit counts by.
       TITAN_TRUSTED_PROXIES: 172.31.250.2
+      TITAN_CONTROLLER_SOCKET: /run/titan-controller/controller.sock
     secrets: [db_password, claude_token]
+    volumes: [controller-socket:/run/titan-controller:ro]
     networks: [titan]
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Started first, the controller's image gives the socket's volume its
+      # owner and mode.
+      controller:
+        condition: service_started
     restart: unless-stopped
 
   # Applies pending migrations, then exits; the api starts only after it.
@@ -78,6 +88,35 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  # The controller (decisions #4, #142): drives the stack with `docker
+  # compose` through the Docker socket, the most sensitive privilege on the
+  # node, since it amounts to root on the machine. So it has no network at
+  # all and serves only a Unix socket in its own volume (decision #78), which
+  # only the api shares: the socket is mode 0660 in a 0750 folder, owned by
+  # the controller's user 10002 and the api's group 10001.
+  controller:
+    image: ${TITAN_CONTROLLER_IMAGE:?}
+    user: "10002:10001"
+    # The group that owns the Docker socket on the machine, so the
+    # controller reaches Docker without being root.
+    group_add: ["${DOCKER_GID:?}"]
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 64m
+    network_mode: none
+    environment:
+      TITAN_NODE_DIR: ${TITAN_NODE_DIR:?}
+      TITAN_COMPOSE_PROJECT: ${TITAN_COMPOSE_PROJECT:-titan}
+      TITAN_CONTROLLER_SOCKET: /run/titan-controller/controller.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The node folder at the same path as on the machine (decision #148),
+      # so paths in compose.yaml mean the same inside and out.
+      - ${TITAN_NODE_DIR:?}:${TITAN_NODE_DIR:?}:ro
+      - controller-socket:/run/titan-controller
+    restart: unless-stopped
 
   db:
     image: pgvector/pgvector:0.8.6-pg18-trixie@sha256:78bf48b801e792f99e3ac62b5036fd3876e9be48afda16c1e331af1c75ceb2ff
@@ -110,6 +149,7 @@ secrets:
 
 volumes:
   db-data:
+  controller-socket:
 
 # NOTE: the subnet is fixed, so nginx's address is known to the api; Docker
 # refuses to start the stack if the subnet overlaps a network already on the

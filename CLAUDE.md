@@ -21,14 +21,21 @@ repository; change `titan-shared` through its own pull request.
 
 | What | Command |
 |---|---|
-| The node test: build titan-backend's images, install `node/` into an empty node folder, start the stack and check it, then remove the stack, its volume and the built images; the files it wrote into the folder stay (needs Docker, port 443 and the subnet `172.31.250.0/24` free) | `scripts/node-test.sh <empty node folder> <titan-backend checkout>` |
+| Test the controller | `go test ./...` |
+| Format, vet, lint | `gofmt -l .` (prints nothing), `go vet ./...`, `golangci-lint run` |
+| Build the controller's image | `docker build --tag titan-controller .` |
+| The node test: build titan-backend's images and the controller's image, install `node/` into an empty node folder, start the stack and check it, then remove the stack, its volumes and the built images; the files it wrote into the folder stay (needs Docker, port 443 and the subnet `172.31.250.0/24` free) | `scripts/node-test.sh <empty node folder> <titan-backend checkout>` |
 
-The node test runs in CI on every pull request
+Go's version is the `toolchain` line of `go.mod`; with an older Go installed,
+`go` downloads that version itself. `golangci-lint` is the version in
+`.github/workflows/checks.yml`.
+
+The node test makes the node folder readable by everyone (`0755`), since the
+controller reads it as its own user, and needs `/var/run/docker.sock` on the
+machine. The node test runs in CI on every pull request
 (`.github/workflows/node.yml`, node folder `/opt/titan`). Elsewhere, give it
 an empty temporary folder on a machine with Docker; it refuses a folder that
 is not empty.
-
-Other commands are added here as the code arrives.
 
 ## Rules specific to this repository
 
