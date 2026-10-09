@@ -26,8 +26,8 @@ the node test exist; the controller does not yet. See the
 
 | Path | What it is |
 |---|---|
-| `node/compose.yaml` | The stack: `nginx`, `api`, `migrate` (applies migrations, then exits) and `db` |
-| `node/nginx/titan.conf` | nginx: TLS on 443, `/api/` to the API, `/` answers 404 until the web UI arrives, security headers |
+| `node/compose.yaml` | The stack: `nginx`, `api`, `migrate` (applies migrations, then exits) and `db`, on the network `172.31.250.0/24`; nginx has the fixed address `172.31.250.2`, the only one the api believes `X-Forwarded-For` from (`TITAN_TRUSTED_PROXIES`) |
+| `node/nginx/titan.conf` | nginx: TLS on 443, `/api/` to the API, `/` answers 404 until the web UI arrives, security headers, sign-in (`/api/v1/devices`) limited to 1 request a second per address, up to 11 at once, answered with problem+json when exceeded |
 | `scripts/node-test.sh` | The node test: installs `node/` into a node folder, starts the stack and checks it |
 | `.github/workflows/node.yml` | Runs the node test on every pull request |
 
@@ -42,8 +42,9 @@ Beside `compose.yaml` the node folder holds what is not in git:
 ## Run the stack by hand
 
 Until the controller installs a node, the steps are the node test's. It needs
-Docker, port 443 free, and a `titan-backend` checkout to build the images
-from, since none are published yet
+Docker, port 443 and the subnet `172.31.250.0/24` free, and a
+`titan-backend` checkout to build the images from, since none are published
+yet
 ([decision #149](shared/docs/decisions/README.md#register)).
 
 1. Build the images:
@@ -71,10 +72,15 @@ scripts/node-test.sh <empty node folder> <titan-backend checkout>
 
 It builds the backend's images, installs the node with a self-signed
 certificate for `localhost`, starts the stack, creates the owner, and checks
-signing in, the security headers, TLS 1.2 and 1.3 (1.1 refused), HTTP/2 and
-that only 443 is published, that nginx logs JSON lines without query
-strings, and that nginx reaches a recreated api. It needs an empty node folder
-and refuses any other. Whatever happens, it then removes the stack, its volume
+signing in, the password-guessing limit by the client's address (believed
+only from nginx), nginx's sign-in rate limit, the security headers, TLS 1.2
+and 1.3 (1.1 refused), HTTP/2 and that only 443 is published, that nginx
+logs JSON lines without query strings, and that nginx reaches a recreated
+api. Its requests come over loopback, so it proves the mechanism of the
+client address; which address a real client has on a node reached over
+Tailscale is checked by hand before a release
+([decision #82](shared/docs/decisions/README.md#register)). It needs an
+empty node folder and refuses any other. Whatever happens, it then removes the stack, its volume
 and the images it built; the files it wrote into the node folder stay. Nothing
 is pushed or published.
 

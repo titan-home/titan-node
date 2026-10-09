@@ -21,7 +21,7 @@ repository; change `titan-shared` through its own pull request.
 
 | What | Command |
 |---|---|
-| The node test: build titan-backend's images, install `node/` into an empty node folder, start the stack and check it, then remove the stack, its volume and the built images; the files it wrote into the folder stay (needs Docker and port 443) | `scripts/node-test.sh <empty node folder> <titan-backend checkout>` |
+| The node test: build titan-backend's images, install `node/` into an empty node folder, start the stack and check it, then remove the stack, its volume and the built images; the files it wrote into the folder stay (needs Docker, port 443 and the subnet `172.31.250.0/24` free) | `scripts/node-test.sh <empty node folder> <titan-backend checkout>` |
 
 The node test runs in CI on every pull request
 (`.github/workflows/node.yml`, node folder `/opt/titan`). Elsewhere, give it
@@ -34,8 +34,9 @@ Other commands are added here as the code arrives.
 
 - The controller is the owner's first Go project: prepare scaffolding, failing tests and explanations; the owner writes the logic (see the AI rules).
 - Every change to the compose file or nginx config is checked by a node test that starts the stack.
-- Never weaken the nginx security headers or TLS settings without a decision
-  in the register.
+- Never weaken the nginx security headers, TLS settings or sign-in rate
+  limit, and never let the api believe `X-Forwarded-For` from anything but
+  nginx's fixed address, without a decision in the register.
 
 ## Before committing
 

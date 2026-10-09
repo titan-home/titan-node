@@ -110,6 +110,74 @@ username=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["username"])
 [[ $username == "$owner" ]] || fail "GET /api/v1/me signed in: expected username $owner, got $username"
 echo "ok: /api/v1/me signed in answers the owner's username"
 
+# The password-guessing limit (decision #27): 10 wrong passwords from one
+# address refuse that address and account, even with the right password.
+# One request a second, nginx's rate, so nginx's own limit never answers.
+printf '{"username": "%s", "password": "wrong", "name": "node test"}' "$owner" >"$work/wrong.json"
+for attempt in {1..10}; do
+    result=$(request wrong https://localhost/api/v1/devices \
+        --header 'Content-Type: application/json' --data "@$work/wrong.json")
+    [[ $result == "401 application/problem+json" ]] ||
+        fail "wrong password, attempt $attempt: expected 401 application/problem+json, got $result"
+    sleep 1
+done
+result=$(request locked https://localhost/api/v1/devices \
+    --header 'Content-Type: application/json' --data "@$work/sign-in.json")
+[[ $result == "429 application/problem+json" ]] ||
+    fail "the right password after 10 wrong ones: expected the api's 429 application/problem+json, got $result"
+tr -d '\r' <"$work/locked.headers" | grep --quiet --ignore-case --line-regexp --extended-regexp 'retry-after: [0-9]+' ||
+    fail "the api's 429 lacks a Retry-After header"
+echo "ok: after 10 wrong passwords the right one answers 429 with Retry-After"
+
+# The limit counts the client's address, not nginx's. Seen from the node's
+# network, the test's requests come from its gateway, 172.31.250.1.
+# from_nginx <address>: signs the owner in at the api directly from nginx,
+# the trusted proxy, with X-Forwarded-For naming <address>, and prints the
+# status code.
+from_nginx() {
+    docker exec --interactive "$(compose ps --quiet nginx)" curl --silent --show-error \
+        --output /dev/null --write-out '%{http_code}' --header 'Content-Type: application/json' \
+        --header "X-Forwarded-For: $1" --data @- http://api:8000/api/v1/devices <"$work/sign-in.json"
+}
+# From nginx the header is believed: another address signs in, while the
+# test's own address is locked. Were the header ignored, every request from
+# nginx would count as nginx's own address, which the wrong passwords above
+# locked, and 192.0.2.1 would answer 429 too.
+result=$(from_nginx 192.0.2.1) || result="no answer"
+[[ $result == 201 ]] ||
+    fail "signing in from nginx with X-Forwarded-For 192.0.2.1: expected 201, got $result; the api does not believe nginx's X-Forwarded-For (TITAN_TRUSTED_PROXIES)"
+result=$(from_nginx 172.31.250.1) || result="no answer"
+[[ $result == 429 ]] ||
+    fail "signing in from nginx with X-Forwarded-For 172.31.250.1: expected 429, got $result; the test's address is not 172.31.250.1"
+# From any other container the header is ignored, and its own address is not locked.
+result=$(compose run --rm --no-deps -T migrate python3 -c '
+import sys, urllib.error, urllib.request
+request = urllib.request.Request(
+    "http://api:8000/api/v1/devices",
+    data=sys.stdin.buffer.read(),
+    headers={"Content-Type": "application/json", "X-Forwarded-For": "172.31.250.1"},
+)
+try:
+    print(urllib.request.urlopen(request, timeout=10).status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+' <"$work/sign-in.json") || result="no answer"
+[[ $result == 201 ]] ||
+    fail "signing in from another container with X-Forwarded-For 172.31.250.1: expected 201, got $result; the api believes a container other than nginx"
+echo "ok: the api believes X-Forwarded-For from nginx only"
+
+# nginx's own limit: a burst of sign-ins from one address meets its 429,
+# problem+json like every error of the API. An empty body fails fast in
+# the api, before any password check.
+for _ in {1..30}; do
+    result=$(request flooded https://localhost/api/v1/devices \
+        --header 'Content-Type: application/json' --data '{}')
+    [[ $result == 429* ]] && break
+done
+[[ $result == "429 application/problem+json" ]] ||
+    fail "30 rapid sign-ins: expected nginx's 429 application/problem+json at some point, got $result last"
+echo "ok: nginx answers 429 application/problem+json to a burst of sign-ins"
+
 result=$(request root https://localhost/)
 [[ $result == 404* ]] || fail "GET /: expected 404, got $result"
 echo "ok: / answers 404"
@@ -129,13 +197,13 @@ security_headers=(
     "permissions-policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()"
     "server: nginx"
 )
-for name in anonymous whoami root; do
+for name in anonymous whoami locked flooded root; do
     for header in "${security_headers[@]}"; do
         tr -d '\r' <"$work/$name.headers" | grep --quiet --ignore-case --line-regexp --fixed-strings -- "$header" ||
             fail "response '$name' lacks the header '$header'"
     done
 done
-echo "ok: every security header is on /api responses and on the / 404"
+echo "ok: every security header is on /api responses, both 429s and the / 404"
 
 # tls <version> [<ciphers>]: connects with only that TLS version and prints
 # openssl's output; SECLEVEL=0 lets the client offer old versions and
