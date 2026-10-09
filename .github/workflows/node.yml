@@ -1,0 +1,34 @@
+name: node
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  node-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Until the first pre-release the node test builds the backend's images
+      # from source (decision #149); nothing is pushed anywhere.
+      - name: Check out titan-backend
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: titan-home/titan-backend
+          ref: master
+          path: titan-backend
+          persist-credentials: false
+      - name: Show the titan-backend commit under test
+        run: git -C titan-backend log -1 --format='titan-backend %H'
+      - name: Create the node folder
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/titan
+      - name: Run the node test
+        run: scripts/node-test.sh /opt/titan titan-backend

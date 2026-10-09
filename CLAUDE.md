@@ -19,7 +19,16 @@ repository; change `titan-shared` through its own pull request.
 - Go, version pinned in `go.mod`; `gofmt`, `go vet`, `golangci-lint`, `go test`.
 - Talks to Docker through its socket: the most sensitive privilege on the node; keep that code small, reviewed and tested.
 
-Commands are added here as the code arrives.
+| What | Command |
+|---|---|
+| The node test: build titan-backend's images, install `node/` into an empty node folder, start the stack and check it, then remove the stack, its volume and the built images; the files it wrote into the folder stay (needs Docker and port 443) | `scripts/node-test.sh <empty node folder> <titan-backend checkout>` |
+
+The node test runs in CI on every pull request
+(`.github/workflows/node.yml`, node folder `/opt/titan`). Elsewhere, give it
+an empty temporary folder on a machine with Docker; it refuses a folder that
+is not empty.
+
+Other commands are added here as the code arrives.
 
 ## Rules specific to this repository
 
@@ -36,8 +45,8 @@ The commands are settled as the code arrives.
 
 1. `gofmt -l .` prints nothing; `go vet ./...` and `golangci-lint run` pass.
 2. `go test` passes for every package the commit touches.
-3. If the compose file or the nginx config changed: the node test that starts
-   the stack passes.
+3. If anything under `node/` or `scripts/node-test.sh` changed: the node test
+   passes: `scripts/node-test.sh <empty node folder> <titan-backend checkout>`.
 4. If the Docker access code changed: its tests pass and the change is called
    out in the commit message.
 5. If Markdown or the `shared/` pointer changed:
