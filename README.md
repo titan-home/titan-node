@@ -64,6 +64,55 @@ yet
 The API answers on `https://<host name>/api/`. Stop the stack with
 `docker compose down`; `--volumes` also deletes the database.
 
+After 10 failed sign-ins within 15 minutes the api refuses that address and
+account for 15 minutes; devices already signed in keep working. To lift it
+sooner, restart the api: `docker compose restart api`. The count lives in
+its memory, so this clears every lock, and chats in progress are cut
+([decision #153](shared/docs/decisions/README.md#register)).
+
+## Client addresses behind Tailscale
+
+The api limits password guessing per client address and account, and takes
+the address from nginx only. On a node reached over Tailscale with its
+defaults, every client may reach nginx with one address, the network's
+gateway `172.31.250.1`, and the limit then acts per account. This is accepted
+([decision #152](shared/docs/decisions/README.md#register)); whoever runs the
+machine can restore real addresses on their own. There are two causes:
+
+| Cause | Why |
+|---|---|
+| Tailscale's source NAT | `tailscaled` masquerades traffic it forwards from the tailnet, Docker's published ports included. It applies when Tailscale set its firewall rules after Docker, so it can change with every restart of either. |
+| IPv6 | The stack's network is IPv4 only, so Docker passes IPv6 connections through `docker-proxy`, which connects to nginx from the gateway. |
+
+To give the api each device's real tailnet address:
+
+1. Turn off Tailscale's source NAT on the host:
+   `tailscale set --snat-subnet-routes=false`. It is kept across restarts. If
+   the machine is also a subnet router or an exit node, devices on its local
+   network then need a route back to the tailnet.
+2. Publish 443 on IPv4 only: in the node folder's `compose.yaml`, change the
+   nginx port to `"0.0.0.0:443:8443"`. Clients fall back to IPv4. An update
+   that replaces the compose file undoes this change, so check it after one.
+
+The other way, `tailscale serve --tcp 443 --proxy-protocol 2` in front of
+nginx, needs a PROXY listener in nginx that the node does not have yet.
+
+In the tailnet's access policy, a grant that lets only your own devices and
+the people you share the node with reach `tcp:443` on it keeps everyone else
+from trying a password at all.
+
+To check, as root on the node, while another tailnet device opens
+`https://<node's tailnet name>/api/v1/me` with `curl -4` and then `curl -6`:
+
+1. `iptables -t nat -S ts-postrouting`: with the source NAT off it shows no
+   `MASQUERADE`.
+2. `tcpdump -nni br-<the titan network's id> 'tcp dst port 8443 and tcp[tcpflags] & tcp-syn != 0'`:
+   the source is the device's `100.x` address, not `172.31.250.1`; `curl -6`
+   is refused.
+3. Repeat after `systemctl restart tailscaled` and again after
+   `systemctl restart docker`: the order of restarts must not change the
+   source.
+
 ## Node test
 
 ```sh
