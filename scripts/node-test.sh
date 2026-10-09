@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The node test: installs node/ into an empty node folder, starts the stack
-# with titan-backend's images built from source (decision #149) and a
-# self-signed certificate (decision #82), checks it over HTTPS, then removes
-# the stack, its volume and the images it built; the files it wrote into the
-# node folder stay.
+# with titan-backend's images and the controller's image built from source
+# (decision #149) and a self-signed certificate (decision #82), checks it over
+# HTTPS and through the controller's socket, then removes the stack, its
+# volumes and the images it built; the files it wrote into the node folder
+# stay.
 # Usage: scripts/node-test.sh <empty node folder> <titan-backend checkout>
 set -euo pipefail
 
@@ -19,9 +20,12 @@ if [[ -n $(ls -A "$node") ]]; then
     echo "$0: the node folder $node is not empty; give the node test an empty one" >&2
     exit 2
 fi
+# The controller reads the node folder as its own user, not the folder's owner.
+chmod 0755 "$node"
 repository=$(dirname "$(dirname "$(realpath "$0")")")
 api_image=titan-api:node-test
 admin_image=titan-admin:node-test
+controller_image=titan-controller:node-test
 work=$(mktemp -d)
 
 # The project name differs from a real node's, `titan`, so the test never
@@ -44,7 +48,7 @@ cleanup() {
     if [[ -f $node/compose.yaml ]]; then
         compose down --volumes || true
     fi
-    docker image rm "$api_image" "$admin_image" || true
+    docker image rm "$api_image" "$admin_image" "$controller_image" || true
     rm -rf "$work"
 }
 trap cleanup EXIT
@@ -52,10 +56,19 @@ trap cleanup EXIT
 echo "== Building the backend's images"
 docker build --target api --tag "$api_image" "$backend"
 docker build --target admin --tag "$admin_image" "$backend"
+echo "== Building the controller's image"
+docker build --tag "$controller_image" "$repository"
 
 echo "== Installing the node into $node"
 cp -R "$repository/node/." "$node/"
-printf 'TITAN_API_IMAGE=%s\nTITAN_ADMIN_IMAGE=%s\n' "$api_image" "$admin_image" >"$node/.env"
+cat >"$node/.env" <<EOF
+TITAN_API_IMAGE=$api_image
+TITAN_ADMIN_IMAGE=$admin_image
+TITAN_CONTROLLER_IMAGE=$controller_image
+TITAN_NODE_DIR=$node
+TITAN_COMPOSE_PROJECT=titan-node-test
+DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+EOF
 # NOTE: secrets and the TLS key are 0644 in 0700 folders, because the
 # containers read them as different users; decision #77 asks for 0600. The
 # controller's secret store, a later step, gives each file to its reader.
@@ -231,7 +244,7 @@ if curl --silent --max-time 5 http://localhost:80/ >/dev/null; then fail "someth
 ports=$(docker port "$(compose ps --quiet nginx)")
 published=$(grep --invert-match --extended-regexp '^8443/tcp -> (0\.0\.0\.0|\[::\]):443$' <<<"$ports" || true)
 [[ -z $published ]] || fail "nginx publishes more than 443: $published"
-for service in api db; do
+for service in api db controller; do
     published=$(docker port "$(compose ps --quiet "$service")")
     [[ -z $published ]] || fail "$service publishes a port on the host: $published"
 done
@@ -277,5 +290,72 @@ done
 [[ $result == "401 application/problem+json" ]] ||
     fail "GET /api/v1/me after recreating the api: expected 401 application/problem+json within 30 seconds, got $result"
 echo "ok: nginx reaches the recreated api"
+
+echo "== Checking the controller"
+# The controller serves only its socket (decision #78; node.md, "Node
+# controller", criteria 3 and 4): no network at all, and a socket only its
+# own user and the api's group can use, in a volume only the api shares.
+network=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$(compose ps --quiet controller)")
+[[ $network == none ]] ||
+    fail "the controller has the network $network, want none (node.md, Node controller, criterion 3)"
+socket=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller/controller.sock) || socket="no socket"
+[[ $socket == "660 10002 10001" ]] ||
+    fail "the controller's socket: expected mode 660, owner 10002, group 10001, got $socket (node.md, Node controller, criterion 4)"
+folder=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller)
+[[ $folder == "750 10002 10001" ]] ||
+    fail "the socket's folder: expected mode 750, owner 10002, group 10001, got $folder (node.md, Node controller, criterion 4)"
+for service in nginx db migrate; do
+    mounts=$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' "$(compose ps --all --quiet "$service")")
+    [[ $mounts != *controller-socket* ]] ||
+        fail "$service mounts the controller's socket volume; only the api may (node.md, Node controller, criterion 4)"
+done
+# Another user in the api's own container is refused by the socket's
+# folder and mode.
+result=$(compose exec -T --user 10003:10003 api python -c '
+import socket
+try:
+    socket.socket(socket.AF_UNIX).connect("/run/titan-controller/controller.sock")
+    print("connected")
+except PermissionError:
+    print("refused")
+') || result="no answer"
+[[ $result == refused ]] ||
+    fail "user 10003 in the api's container connecting to the controller's socket: expected refused, got $result (node.md, Node controller, criterion 4)"
+echo "ok: the controller has no network; its socket is 0660, user 10002, group 10001, in a 0750 folder in a volume only the api mounts; another user is refused (node.md, Node controller, criteria 3 and 4)"
+
+# Docker access works from inside the controller, apart from its own code.
+compose exec -T controller docker compose --project-directory "$node" --project-name titan-node-test \
+    ps --all --format json >"$work/ps.json" || fail "docker compose ps does not run inside the controller"
+services=$(python3 -c 'import json, sys; print(" ".join(sorted(json.loads(line)["Service"] for line in sys.stdin)))' <"$work/ps.json")
+[[ $services == "api controller db migrate nginx" ]] ||
+    fail "docker compose ps inside the controller: expected api controller db migrate nginx, got $services"
+echo "ok: docker compose ps runs inside the controller"
+
+# GET /health over the socket, from the api, the only container that shares it.
+compose exec -T api python -c '
+import http.client, socket
+
+class Connection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.sock.settimeout(30)
+        self.sock.connect("/run/titan-controller/controller.sock")
+
+connection = Connection("controller")
+connection.request("GET", "/health")
+response = connection.getresponse()
+print(response.status, response.getheader("Content-Type"))
+print(response.read().decode())
+' >"$work/health" || fail "GET /health over the controller's socket: no answer"
+python3 -c '
+import json, sys
+status = sys.stdin.readline().strip()
+body = sys.stdin.read()
+assert status == "200 application/json", f"expected 200 application/json, got {status}: {body}"
+services = {service["name"]: service["status"] for service in json.loads(body)["services"]}
+want = {"nginx": "healthy", "api": "healthy", "db": "healthy", "controller": "running", "migrate": "done"}
+assert services == want, f"expected {want}, got {services}"
+' <"$work/health" || fail "GET /health over the controller's socket: $(cat "$work/health")"
+echo "ok: GET /health over the controller's socket answers every service's status (node.md, Node controller, criterion 3)"
 
 echo "== The node test passed"

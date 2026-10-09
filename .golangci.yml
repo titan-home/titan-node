@@ -1,0 +1,10 @@
+version: "2"
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused),
+  # plus revive with its default rules, which ask for a doc comment on
+  # everything exported, and gosec for security.
+  default: standard
+  enable:
+    - revive
+    - gosec
