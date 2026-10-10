@@ -35,7 +35,8 @@ controller reads it as its own user, and needs `/var/run/docker.sock` on the
 machine. The node test runs in CI on every pull request
 (`.github/workflows/node.yml`, node folder `/opt/titan`). Elsewhere, give it
 an empty temporary folder on a machine with Docker; it refuses a folder that
-is not empty.
+is not empty. It leaves `secrets/` owned by the controller's user, `10002`,
+so removing the folder afterwards needs root.
 
 ## Rules specific to this repository
 
