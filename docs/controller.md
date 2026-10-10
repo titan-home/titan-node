@@ -79,7 +79,8 @@ as compose reports them.
 | `starting` | Running, and its healthcheck has not passed yet | `State` `running`, `Health` `starting` |
 | `unhealthy` | Running, and its healthcheck fails | `State` `running`, `Health` `unhealthy` |
 | `done` | A one-off service, such as `migrate`, finished | `State` `exited`, `ExitCode` 0 |
-| `down` | Not running as it should | `exited` with another code, `restarting`, `dead`, `created` or `paused` |
+| `down` | Not running as it should | `exited` with another code, `restarting`, `dead`, `created`, `paused` or `removing` |
+| `unknown` | A state or health the controller does not know, such as one a newer Docker adds | Anything else |
 
 ## Configuration
 
