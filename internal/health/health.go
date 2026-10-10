@@ -52,6 +52,9 @@ func Parse(output []byte) ([]Service, error) {
 	services := []Service{}
 
 	scanner := bufio.NewScanner(bytes.NewReader(output))
+	// A line carries every label of the image, which may pass the
+	// scanner's default limit of 64 KiB.
+	scanner.Buffer(nil, 1<<20)
 	n := 0
 	for scanner.Scan() {
 		n++
