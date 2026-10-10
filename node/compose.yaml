@@ -55,12 +55,12 @@ services:
     environment:
       TITAN_DATABASE_URL: postgresql+psycopg://titan@db/titan
       TITAN_DATABASE_PASSWORD_FILE: /run/secrets/db_password
-      TITAN_CLAUDE_TOKEN_FILE: /run/secrets/claude_token
+      TITAN_TOKEN_KEY_FILE: /run/secrets/token_key
       # nginx alone, not the whole network: no other container can name a
       # client address, which the password-guessing limit counts by.
       TITAN_TRUSTED_PROXIES: 172.31.250.2
       TITAN_CONTROLLER_SOCKET: /run/titan-controller/controller.sock
-    secrets: [db_password, claude_token]
+    secrets: [db_password, token_key]
     volumes: [controller-socket:/run/titan-controller:ro]
     networks: [titan]
     depends_on:
@@ -147,8 +147,8 @@ services:
 secrets:
   db_password:
     file: ./secrets/db_password
-  claude_token:
-    file: ./secrets/claude_token
+  token_key:
+    file: ./secrets/token_key
 
 volumes:
   db-data:

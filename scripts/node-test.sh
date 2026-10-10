@@ -71,11 +71,9 @@ DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 EOF
 # The secret store belongs to the controller's user, mode 0700 (decision
 # #163). Making a folder another user's needs root, which the controller's
-# image has through Docker. The Claude token stays empty: no test calls
-# Claude.
-docker run --rm --user 0:0 --entrypoint sh --volume "$node:$node" "$controller_image" -c '
-install -d -o 10002 -g 10002 -m 0700 "$1/secrets" &&
-install -o 10002 -g 10002 -m 0644 /dev/null "$1/secrets/claude_token"' sh "$node"
+# image has through Docker.
+docker run --rm --user 0:0 --entrypoint install --volume "$node:$node" "$controller_image" \
+    -d -o 10002 -g 10002 -m 0700 "$node/secrets"
 compose run --rm --no-deps controller secrets init >/dev/null ||
     fail "titan-controller secrets init failed"
 # The secret files and the TLS key are 0644 in 0700 folders: compose mounts a
@@ -311,10 +309,10 @@ socket=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller/con
 folder=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller)
 [[ $folder == "750 10002 10001" ]] ||
     fail "the socket's folder: expected mode 750, owner 10002, group 10001, got $folder (node.md, Node controller, criterion 4)"
-store=$(compose exec -T controller stat -c '%a %u' "$node/secrets" "$node/secrets/db_password" | tr '\n' ' ')
-[[ $store == "700 10002 644 10002 " ]] ||
-    fail "the secret store and db_password: expected 700 10002 and 644 10002, got $store (node.md, secrets storage, criteria 2 and 4)"
-echo "ok: secrets init created db_password in the controller's 0700 secret store"
+store=$(compose exec -T controller stat -c '%a %u' "$node/secrets" "$node/secrets/db_password" "$node/secrets/token_key" | tr '\n' ' ')
+[[ $store == "700 10002 644 10002 644 10002 " ]] ||
+    fail "the secret store, db_password and token_key: expected 700 10002, 644 10002 and 644 10002, got $store (node.md, secrets storage, criteria 2 and 4)"
+echo "ok: secrets init created db_password and token_key in the controller's 0700 secret store"
 for service in nginx db migrate; do
     mounts=$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' "$(compose ps --all --quiet "$service")")
     [[ $mounts != *controller-socket* ]] ||

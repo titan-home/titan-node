@@ -5,6 +5,7 @@ package secrets
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,23 +14,37 @@ import (
 	"path/filepath"
 )
 
-// generated are the secrets the controller makes up itself: random values no
-// one has to type.
-var generated = []string{"db_password"}
+// secret is one secret the controller makes up itself: a random value no one
+// has to type.
+type secret struct {
+	name string
+	// encode turns 32 random bytes into the file's content.
+	encode func([]byte) string
+}
+
+// generated are the secrets the controller makes up itself.
+var generated = []secret{
+	// Hex has nothing a shell or a connection string reads specially.
+	{"db_password", hex.EncodeToString},
+	// The key that encrypts each user's Claude token: 32 bytes for
+	// AES-256-GCM (decision #166).
+	{"token_key", base64.URLEncoding.EncodeToString},
+}
 
 // Init creates every generated secret missing from dir and keeps those that
 // exist, so running it again changes nothing. It returns the names of the
 // secrets it created.
 func Init(dir string) ([]string, error) {
 	created := []string{}
-	for _, name := range generated {
+	for _, want := range generated {
+		name := want.name
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("checking secret %s: %w", name, err)
 		}
-		value, err := random()
+		value, err := random(want.encode)
 		if err != nil {
 			return nil, err
 		}
@@ -41,14 +56,13 @@ func Init(dir string) ([]string, error) {
 	return created, nil
 }
 
-// random is 32 random bytes in hex: 64 characters with nothing a shell or a
-// connection string would read specially.
-func random() ([]byte, error) {
+// random is 32 random bytes, encoded.
+func random(encode func([]byte) string) ([]byte, error) {
 	value := make([]byte, 32)
 	if _, err := rand.Read(value); err != nil {
 		return nil, fmt.Errorf("reading random bytes: %w", err)
 	}
-	return []byte(hex.EncodeToString(value)), nil
+	return []byte(encode(value)), nil
 }
 
 // create writes value to path, which must not exist. It writes a temporary

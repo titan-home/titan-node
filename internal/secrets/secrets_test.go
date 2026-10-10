@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -18,14 +19,31 @@ func read(t *testing.T, path string) string {
 	return string(value)
 }
 
-func TestInitCreatesTheDatabasePassword(t *testing.T) {
-	dir := t.TempDir()
-	created, err := Init(dir)
+func TestInitCreatesEverySecret(t *testing.T) {
+	created, err := Init(t.TempDir())
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if !slices.Equal(created, []string{"db_password"}) {
-		t.Errorf("created = %v, want [db_password]", created)
+	if want := []string{"db_password", "token_key"}; !slices.Equal(created, want) {
+		t.Errorf("created = %v, want %v", created, want)
+	}
+}
+
+func TestInitCreatesTheTokenKey(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(dir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	value := read(t, filepath.Join(dir, "token_key"))
+	if decoded, err := base64.URLEncoding.DecodeString(value); err != nil || len(decoded) != 32 {
+		t.Errorf("token_key = %q, want 32 bytes in URL-safe base64", value)
+	}
+}
+
+func TestInitCreatesTheDatabasePassword(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(dir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 	path := filepath.Join(dir, "db_password")
 	value := read(t, path)
@@ -51,8 +69,8 @@ func TestInitKeepsASecretThatExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if len(created) != 0 {
-		t.Errorf("created = %v, want nothing", created)
+	if !slices.Equal(created, []string{"token_key"}) {
+		t.Errorf("created = %v, want only token_key", created)
 	}
 	if value := read(t, path); value != "chosen by hand" {
 		t.Errorf("db_password = %q, want it kept", value)
@@ -82,8 +100,8 @@ func TestInitLeavesNoTemporaryFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("the store holds %d files, want only db_password", len(entries))
+	if len(entries) != len(generated) {
+		t.Errorf("the store holds %d files, want only the %d secrets", len(entries), len(generated))
 	}
 }
 
