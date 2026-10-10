@@ -1,14 +1,41 @@
 package health
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 )
 
+// The node's services and their restart policies, as
+// `docker compose config --format json` prints them for node/compose.yaml
+// (Docker Compose 5.6.0): migrate has none.
+var restarts = map[string]string{
+	"nginx": "unless-stopped", "api": "unless-stopped", "db": "unless-stopped",
+	"controller": "unless-stopped", "migrate": "",
+}
+
+// configOf prints a compose config with the named services of the node, cut
+// to what Parse reads plus a field it ignores.
+func configOf(t *testing.T, names ...string) []byte {
+	t.Helper()
+	services := map[string]map[string]string{}
+	for _, name := range names {
+		services[name] = map[string]string{"image": name + ":test"}
+		if restarts[name] != "" {
+			services[name]["restart"] = restarts[name]
+		}
+	}
+	output, err := json.Marshal(map[string]any{"name": "titan", "services": services})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
+
 // The lines below are `docker compose ps --all --format json` output, which
-// Docker Compose prints as one JSON object per line. deadLine, oddStateLine
-// and oddHealthLine were written by hand in the same format; all the others
+// Docker Compose prints as one JSON object per line. deadLine, stoppedLine,
+// oddStateLine and oddHealthLine were written by hand in the same format; all the others
 // are real, from Docker Compose 5.6.0. All but fullLine are trimmed to a few
 // fields and given the node's service names.
 const (
@@ -21,6 +48,7 @@ const (
 	failedLine    = `{"ExitCode":3,"Health":"","Name":"titan-migrate-1","Service":"migrate","State":"exited","Status":"Exited (3) 7 seconds ago"}`
 	restartLine   = `{"ExitCode":0,"Health":"","Name":"titan-api-1","Service":"api","State":"restarting","Status":"Restarting (1) 2 seconds ago"}`
 	deadLine      = `{"ExitCode":137,"Health":"","Name":"titan-api-1","Service":"api","State":"dead","Status":"Dead"}`
+	stoppedLine   = `{"ExitCode":0,"Health":"","Name":"titan-nginx-1","Service":"nginx","State":"exited","Status":"Exited (0) 5 seconds ago"}`
 	createdLine   = `{"ExitCode":0,"Health":"","Name":"titan-api-1","Service":"api","State":"created","Status":"Created"}`
 	pausedLine    = `{"ExitCode":0,"Health":"","Name":"titan-api-1","Service":"api","State":"paused","Status":"Up 8 seconds (Paused)"}`
 	oddStateLine  = `{"ExitCode":0,"Health":"","Name":"titan-api-1","Service":"api","State":"frozen","Status":"Frozen"}`
@@ -44,7 +72,8 @@ func TestParse(t *testing.T) {
 		{"running without a healthcheck is running", lines(runningLine), []Service{{"controller", Running}}},
 		{"running with its healthcheck starting is starting", lines(startingLine), []Service{{"nginx", Starting}}},
 		{"running and unhealthy is unhealthy", lines(unhealthyLine), []Service{{"db", Unhealthy}}},
-		{"exited with code 0 is done", lines(doneLine), []Service{{"migrate", Done}}},
+		{"a service without a restart policy that exited with 0 is done", lines(doneLine), []Service{{"migrate", Done}}},
+		{"a service Docker restarts that exited with 0 is down", lines(stoppedLine), []Service{{"nginx", Down}}},
 		{"exited with another code is down", lines(failedLine), []Service{{"migrate", Down}}},
 		{"restarting is down", lines(restartLine), []Service{{"api", Down}}},
 		{"dead is down", lines(deadLine), []Service{{"api", Down}}},
@@ -52,18 +81,10 @@ func TestParse(t *testing.T) {
 		{"paused is down", lines(pausedLine), []Service{{"api", Down}}},
 		{"a state Docker may add later is unknown", lines(oddStateLine), []Service{{"api", Unknown}}},
 		{"a health Docker may add later is unknown", lines(oddHealthLine), []Service{{"api", Unknown}}},
-		{
-			"several lines give the services in the order given",
-			lines(startingLine, healthyLine, unhealthyLine, doneLine, runningLine),
-			[]Service{
-				{"nginx", Starting}, {"api", Healthy}, {"db", Unhealthy},
-				{"migrate", Done}, {"controller", Running},
-			},
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := Parse(test.output)
+			got, err := Parse(configOf(t, test.want[0].Name), test.output)
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
@@ -74,20 +95,83 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestParseEmptyOutputIsNoServices(t *testing.T) {
-	got, err := Parse(nil)
+func TestParseGivesEveryServiceSortedByName(t *testing.T) {
+	config := configOf(t, "nginx", "api", "db", "migrate", "controller")
+	got, err := Parse(config, lines(startingLine, healthyLine, unhealthyLine, doneLine, runningLine))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("Parse = %v, want no services", got)
+	want := []Service{
+		{"api", Healthy}, {"controller", Running}, {"db", Unhealthy},
+		{"migrate", Done}, {"nginx", Starting},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
+func TestParseGivesAServiceWithoutAContainerAsDown(t *testing.T) {
+	got, err := Parse(configOf(t, "api", "db"), lines(unhealthyLine))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []Service{{"api", Down}, {"db", Unhealthy}}; !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
+func TestParseLeavesOutAContainerOfAServiceNotInTheConfig(t *testing.T) {
+	got, err := Parse(configOf(t, "db"), lines(healthyLine, unhealthyLine))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []Service{{"db", Unhealthy}}; !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
+func TestParseGivesDoneToAServiceRestartedOnlyOnFailure(t *testing.T) {
+	config := []byte(`{"services":{"migrate":{"restart":"on-failure"}}}`)
+	got, err := Parse(config, lines(doneLine))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []Service{{"migrate", Done}}; !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
+func TestParseGivesDownToAServiceAlwaysRestarted(t *testing.T) {
+	config := []byte(`{"services":{"migrate":{"restart":"always"}}}`)
+	got, err := Parse(config, lines(doneLine))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []Service{{"migrate", Down}}; !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
+func TestParseWithNoServicesIsAnEmptyList(t *testing.T) {
+	got, err := Parse([]byte(`{"name":"titan","services":{}}`), nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("Parse = %#v, want an empty list", got)
+	}
+}
+
+func TestParseRefusesAConfigThatIsNotJSON(t *testing.T) {
+	if _, err := Parse([]byte("services:\n"), lines(healthyLine)); err == nil {
+		t.Fatal("Parse succeeded, want an error")
 	}
 }
 
 func TestParseReadsALineLongerThan64KiB(t *testing.T) {
 	labels := strings.Repeat("x", 100<<10)
 	line := `{"ExitCode":0,"Health":"healthy","Labels":"` + labels + `","Service":"api","State":"running"}`
-	got, err := Parse(lines(line))
+	got, err := Parse(configOf(t, "api"), lines(line))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -97,7 +181,7 @@ func TestParseReadsALineLongerThan64KiB(t *testing.T) {
 }
 
 func TestParseNamesTheLineThatIsNotJSON(t *testing.T) {
-	_, err := Parse(lines(healthyLine, "not json", runningLine))
+	_, err := Parse(configOf(t, "api"), lines(healthyLine, "not json", runningLine))
 	if err == nil {
 		t.Fatal("Parse succeeded, want an error")
 	}
@@ -107,8 +191,7 @@ func TestParseNamesTheLineThatIsNotJSON(t *testing.T) {
 }
 
 func TestParseRefusesALineWithoutService(t *testing.T) {
-	_, err := Parse(lines(noServiceLine))
-	if err == nil {
+	if _, err := Parse(configOf(t, "api"), lines(noServiceLine)); err == nil {
 		t.Fatal("Parse succeeded, want an error")
 	}
 }

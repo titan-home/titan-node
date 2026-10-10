@@ -13,27 +13,35 @@ import (
 	"github.com/titan-home/titan-node/internal/health"
 )
 
-// fakeRunner stands in for `docker compose`: it records what it was called
-// with and answers with output and err.
+// fakeRunner stands in for `docker compose`: it records every call and
+// answers each command, its first argument, with outputs and errs.
 type fakeRunner struct {
-	output []byte
-	err    error
-	called bool
-	ctx    context.Context
-	args   []string
+	outputs map[string]string
+	errs    map[string]error
+	calls   [][]string
+	ctx     context.Context
 }
 
 func (f *fakeRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
-	f.called = true
+	f.calls = append(f.calls, args)
 	f.ctx = ctx
-	f.args = args
-	return f.output, f.err
+	return []byte(f.outputs[args[0]]), f.errs[args[0]]
 }
 
-// Real `docker compose ps --all --format json` lines, trimmed.
-const sample = `{"ExitCode":0,"Health":"healthy","Name":"titan-api-1","Service":"api","State":"running","Status":"Up 9 seconds (healthy)"}
+// The node's config, cut to two services, and their containers: real
+// `docker compose ps --all --format json` lines, trimmed.
+const (
+	sampleConfig = `{"name":"titan","services":{"api":{"restart":"unless-stopped"},"migrate":{}}}`
+	samplePs     = `{"ExitCode":0,"Health":"healthy","Name":"titan-api-1","Service":"api","State":"running","Status":"Up 9 seconds (healthy)"}
 {"ExitCode":0,"Health":"","Name":"titan-migrate-1","Service":"migrate","State":"exited","Status":"Exited (0) 8 seconds ago"}
 `
+)
+
+// sample answers config and ps like a node whose api is healthy and whose
+// migrate is done.
+func sample() *fakeRunner {
+	return &fakeRunner{outputs: map[string]string{"config": sampleConfig, "ps": samplePs}}
+}
 
 // get sends GET /health to the Health handler and returns the response.
 func get(ctx context.Context, t *testing.T, runner *fakeRunner) *httptest.ResponseRecorder {
@@ -45,7 +53,7 @@ func get(ctx context.Context, t *testing.T, runner *fakeRunner) *httptest.Respon
 }
 
 func TestHealthAnswersTheServices(t *testing.T) {
-	response := get(context.Background(), t, &fakeRunner{output: []byte(sample)})
+	response := get(context.Background(), t, sample())
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %q", response.Code, response.Body)
 	}
@@ -91,24 +99,31 @@ func wantBadGateway(t *testing.T, response *httptest.ResponseRecorder, details .
 }
 
 func TestHealthAnswers502WhenComposeFails(t *testing.T) {
-	detail := "permission denied while trying to connect to the docker API"
-	response := get(context.Background(), t, &fakeRunner{err: errors.New(detail)})
-	wantBadGateway(t, response, detail)
+	for _, command := range []string{"config", "ps"} {
+		t.Run(command, func(t *testing.T) {
+			detail := "permission denied while trying to connect to the docker API"
+			runner := sample()
+			runner.errs = map[string]error{command: errors.New(detail)}
+			wantBadGateway(t, get(context.Background(), t, runner), detail)
+		})
+	}
 }
 
 func TestHealthAnswers502WhenTheOutputDoesNotParse(t *testing.T) {
-	output := []byte("not json\n")
-	response := get(context.Background(), t, &fakeRunner{output: output})
+	runner := sample()
+	runner.outputs["ps"] = "not json\n"
+	response := get(context.Background(), t, runner)
 	details := []string{"not json", "line 1"}
 	// Whatever Parse says about the output is detail too.
-	if _, err := health.Parse(output); err != nil {
+	if _, err := health.Parse([]byte(sampleConfig), []byte("not json\n")); err != nil {
 		details = append(details, err.Error())
 	}
 	wantBadGateway(t, response, details...)
 }
 
-func TestHealthAnswersAnEmptyListWhenNothingRuns(t *testing.T) {
-	response := get(context.Background(), t, &fakeRunner{output: nil})
+func TestHealthAnswersAnEmptyListWhenTheStackHasNoServices(t *testing.T) {
+	runner := &fakeRunner{outputs: map[string]string{"config": `{"services":{}}`}}
+	response := get(context.Background(), t, runner)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body %q", response.Code, response.Body)
 	}
@@ -117,21 +132,21 @@ func TestHealthAnswersAnEmptyListWhenNothingRuns(t *testing.T) {
 	}
 }
 
-func TestHealthRunsComposePs(t *testing.T) {
-	runner := &fakeRunner{output: []byte(sample)}
+func TestHealthRunsComposeConfigAndPs(t *testing.T) {
+	runner := sample()
 	get(context.Background(), t, runner)
-	want := []string{"ps", "--all", "--format", "json"}
-	if !slices.Equal(runner.args, want) {
-		t.Errorf("runner args = %q, want %q", runner.args, want)
+	want := [][]string{{"config", "--format", "json"}, {"ps", "--all", "--format", "json"}}
+	if !slices.EqualFunc(runner.calls, want, slices.Equal) {
+		t.Errorf("runner calls = %q, want %q", runner.calls, want)
 	}
 }
 
 func TestHealthPassesTheRequestsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	runner := &fakeRunner{output: []byte(sample)}
+	runner := sample()
 	get(ctx, t, runner)
-	if !runner.called {
+	if len(runner.calls) == 0 {
 		t.Fatal("the runner was not called")
 	}
 	if !errors.Is(runner.ctx.Err(), context.Canceled) {
