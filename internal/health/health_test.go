@@ -84,6 +84,18 @@ func TestParseEmptyOutputIsNoServices(t *testing.T) {
 	}
 }
 
+func TestParseReadsALineLongerThan64KiB(t *testing.T) {
+	labels := strings.Repeat("x", 100<<10)
+	line := `{"ExitCode":0,"Health":"healthy","Labels":"` + labels + `","Service":"api","State":"running"}`
+	got, err := Parse(lines(line))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []Service{{"api", Healthy}}; !slices.Equal(got, want) {
+		t.Errorf("Parse = %v, want %v", got, want)
+	}
+}
+
 func TestParseNamesTheLineThatIsNotJSON(t *testing.T) {
 	_, err := Parse(lines(healthyLine, "not json", runningLine))
 	if err == nil {
