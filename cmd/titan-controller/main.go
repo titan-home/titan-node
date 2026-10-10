@@ -1,6 +1,8 @@
 // Command titan-controller is the node's controller: it serves its API on a
 // Unix socket only, never on the network (decision #78), and drives the
-// node's stack through `docker compose` (decision #142).
+// node's stack through `docker compose` (decision #142). With the arguments
+// `secrets init` it instead creates the node's missing secrets and exits
+// (decision #163).
 package main
 
 import (
@@ -13,15 +15,26 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/titan-home/titan-node/internal/compose"
+	"github.com/titan-home/titan-node/internal/secrets"
 	"github.com/titan-home/titan-node/internal/server"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if len(os.Args) > 1 {
+		if err := command(os.Args[1:]); err != nil {
+			slog.Error("the command failed", "error", err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := run(ctx, stop); err != nil {
@@ -29,6 +42,24 @@ func main() {
 		stop()
 		os.Exit(1)
 	}
+}
+
+// command runs a one-off command instead of serving; the only one is
+// `secrets init`, which needs only TITAN_NODE_DIR.
+func command(args []string) error {
+	if !slices.Equal(args, []string{"secrets", "init"}) {
+		return fmt.Errorf("unknown command %q; the only one is \"secrets init\"", strings.Join(args, " "))
+	}
+	nodeDir := os.Getenv("TITAN_NODE_DIR")
+	if nodeDir == "" {
+		return errors.New("TITAN_NODE_DIR must be set")
+	}
+	created, err := secrets.Init(filepath.Join(nodeDir, "secrets"))
+	if err != nil {
+		return err
+	}
+	slog.Info("the secrets are ready", "created", created)
+	return nil
 }
 
 // settings are the controller's settings, read from the environment.

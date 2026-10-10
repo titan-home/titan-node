@@ -86,6 +86,31 @@ compose file.
 | `down` | Not running as it should | No container; `exited` with 0 while `restart` is `always` or `unless-stopped`; `exited` with another code, `restarting`, `dead`, `created`, `paused` or `removing` |
 | `unknown` | A state or health the controller does not know, such as one a newer Docker adds | Anything else |
 
+## Secret store
+
+`secrets/` in the node folder holds the node's secrets, one file each
+([decisions #77, #163](../shared/docs/decisions/README.md#register)). The folder belongs to the controller's user,
+`10002`, with mode `0700`, so no other user of the machine can enter it; the
+files are mode `0644`, since compose mounts each into containers that run as
+other users. It is the one folder the controller mounts writable.
+
+`secrets init` creates every secret the controller generates and is missing,
+and keeps those that exist, so running it again is safe. Run it once before
+the stack first starts, since compose mounts the files when it creates the
+containers:
+
+```sh
+docker compose run --rm --no-deps controller secrets init
+```
+
+| Secret | What it is | Created by |
+|---|---|---|
+| `db_password` | The database password, read by db, api and migrate | `secrets init`: 32 random bytes in hex |
+| `claude_token` | The Claude token the api uses for now | Whoever installs the node |
+
+A secret is written to a temporary file and linked into place, so an
+interrupted run leaves no half-written secret. Its value is never logged.
+
 ## Configuration
 
 The controller reads its settings from the environment and refuses to start
@@ -106,8 +131,7 @@ user, `10002`:
   the folder and `0644` for `.env` will do. Without `.env`, compose cannot
   fill in the variables `compose.yaml` requires, and every command fails.
 - `.env` must hold no secrets: compose quotes its lines in error messages,
-  which reach the controller's log. Secrets live in `secrets/`, which the
-  controller cannot read.
+  which reach the controller's log. Secrets live in `secrets/`.
 
 The controller logs JSON lines to standard output, never secrets.
 

@@ -69,16 +69,23 @@ TITAN_NODE_DIR=$node
 TITAN_COMPOSE_PROJECT=titan-node-test
 DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 EOF
-# NOTE: secrets and the TLS key are 0644 in 0700 folders, because the
-# containers read them as different users; decision #77 asks for 0600. The
-# controller's secret store, a later step, gives each file to its reader.
-install -d -m 0700 "$node/secrets" "$node/tls"
-openssl rand -hex 32 >"$node/secrets/db_password"
-: >"$node/secrets/claude_token"
+# The secret store belongs to the controller's user, mode 0700 (decision
+# #163). Making a folder another user's needs root, which the controller's
+# image has through Docker. The Claude token stays empty: no test calls
+# Claude.
+docker run --rm --user 0:0 --entrypoint sh --volume "$node:$node" "$controller_image" -c '
+install -d -o 10002 -g 10002 -m 0700 "$1/secrets" &&
+install -o 10002 -g 10002 -m 0644 /dev/null "$1/secrets/claude_token"' sh "$node"
+compose run --rm --no-deps controller secrets init >/dev/null ||
+    fail "titan-controller secrets init failed"
+# The secret files and the TLS key are 0644 in 0700 folders: compose mounts a
+# file with its owner and mode, and the containers read them as different
+# users (decision #77).
+install -d -m 0700 "$node/tls"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -noenc \
     -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
     -keyout "$node/tls/key.pem" -out "$node/tls/cert.pem"
-chmod 0644 "$node/secrets/db_password" "$node/secrets/claude_token" "$node/tls/key.pem" "$node/tls/cert.pem"
+chmod 0644 "$node/tls/key.pem" "$node/tls/cert.pem"
 
 echo "== Starting the stack"
 compose up --wait --wait-timeout 300
@@ -304,6 +311,10 @@ socket=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller/con
 folder=$(compose exec -T controller stat -c '%a %u %g' /run/titan-controller)
 [[ $folder == "750 10002 10001" ]] ||
     fail "the socket's folder: expected mode 750, owner 10002, group 10001, got $folder (node.md, Node controller, criterion 4)"
+store=$(compose exec -T controller stat -c '%a %u' "$node/secrets" "$node/secrets/db_password" | tr '\n' ' ')
+[[ $store == "700 10002 644 10002 " ]] ||
+    fail "the secret store and db_password: expected 700 10002 and 644 10002, got $store (node.md, secrets storage, criteria 2 and 4)"
+echo "ok: secrets init created db_password in the controller's 0700 secret store"
 for service in nginx db migrate; do
     mounts=$(docker inspect --format '{{range .Mounts}}{{.Name}} {{end}}' "$(compose ps --all --quiet "$service")")
     [[ $mounts != *controller-socket* ]] ||

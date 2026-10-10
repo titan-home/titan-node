@@ -42,7 +42,7 @@ Beside `compose.yaml` the node folder holds what is not in git:
 | Path | What it is |
 |---|---|
 | `.env` | `TITAN_API_IMAGE`, `TITAN_ADMIN_IMAGE` and `TITAN_CONTROLLER_IMAGE`, the images; `TITAN_NODE_DIR`, the node folder's path; `DOCKER_GID`, the group of `/var/run/docker.sock`; optionally `TITAN_COMPOSE_PROJECT`, `titan` unless set |
-| `secrets/db_password`, `secrets/claude_token` | The secrets, read through `*_FILE` variables |
+| `secrets/db_password`, `secrets/claude_token` | The secret store, owned by the controller's user `10002`, mode `0700`; the secrets are read through `*_FILE` variables (see [the controller](docs/controller.md#secret-store)) |
 | `tls/cert.pem`, `tls/key.pem` | The certificate and its key |
 
 ## Run the stack by hand
@@ -64,12 +64,16 @@ yet
    `TITAN_CONTROLLER_IMAGE=titan-controller:local`, `TITAN_NODE_DIR=/opt/titan`
    and `DOCKER_GID=` followed by the output of
    `stat -c %g /var/run/docker.sock`.
-4. Create `secrets/` and `tls/` with mode `0700`; put a random password in
-   `secrets/db_password`, the Claude token (or nothing) in
-   `secrets/claude_token`, and the certificate and key in `tls/`. Make the
-   four files readable (`0644`): the containers read them as other users.
-5. Start the stack: `docker compose up --wait`.
-6. Create the owner: `docker compose run --rm migrate titan-admin create-owner`.
+4. As root, create the secret store, owned by the controller's user, with
+   the Claude token (or nothing) in it:
+   `install -d -o 10002 -g 10002 -m 0700 secrets` and
+   `install -o 10002 -g 10002 -m 0644 /dev/null secrets/claude_token`, then
+   write the token into that file.
+5. Create the other secrets: `docker compose run --rm --no-deps controller secrets init`.
+6. Create `tls/` with mode `0700` and put the certificate and key in it,
+   both readable (`0644`): nginx reads them as another user.
+7. Start the stack: `docker compose up --wait`.
+8. Create the owner: `docker compose run --rm migrate titan-admin create-owner`.
 
 The API answers on `https://<host name>/api/`. Stop the stack with
 `docker compose down`; `--volumes` also deletes the database.
@@ -138,7 +142,8 @@ published, that nginx logs JSON lines without query strings, and that nginx
 reaches a recreated api. For the controller it checks that it has no
 network, its socket's owner and mode, that only the api mounts the socket
 and other users there are refused, `docker compose ps` from inside it, and
-`GET /health` over the socket from the api, with nginx running, then
+that `secrets init` made the secret store, `GET /health` over the socket
+from the api, with nginx running, then
 stopped, then removed. Through the API it checks that the owner sees the same
 at `/api/v1/node/health`, and that the api answers 503 while the controller
 is stopped. Its requests come over loopback,
@@ -148,7 +153,8 @@ release ([decision #82](shared/docs/decisions/README.md#register)). It needs
 an empty node folder and refuses any other, and makes it readable by
 everyone (`0755`) for the controller. Whatever happens, it then removes the
 stack, its volumes and the images it built; the files it wrote into the node
-folder stay. Nothing is pushed or published.
+folder stay, and `secrets/` belongs to `10002`, so removing it needs root.
+Nothing is pushed or published.
 
 ## Getting the code
 

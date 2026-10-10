@@ -115,6 +115,9 @@ services:
       # The node folder at the same path as on the machine (decision #148),
       # so paths in compose.yaml mean the same inside and out.
       - ${TITAN_NODE_DIR:?}:${TITAN_NODE_DIR:?}:ro
+      # The secret store, the one folder the controller writes to
+      # (decision #163).
+      - ${TITAN_NODE_DIR:?}/secrets:${TITAN_NODE_DIR:?}/secrets
       - controller-socket:/run/titan-controller
     restart: unless-stopped
 
@@ -137,10 +140,10 @@ services:
       retries: 10
     restart: unless-stopped
 
-# NOTE: the secret files and tls/key.pem are mode 0644 in 0700 folders,
-# because the containers read them as different users; decision #77 asks for
-# 0600. The controller's secret store, a later step, gives each file to its
-# reader.
+# The secret files and tls/key.pem are mode 0644 in 0700 folders: compose
+# mounts a file with its owner and mode, and the containers read them as
+# different users (decision #77). `secrets init` creates the missing ones
+# before the stack first starts (decision #163).
 secrets:
   db_password:
     file: ./secrets/db_password
