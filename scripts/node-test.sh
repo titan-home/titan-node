@@ -369,6 +369,31 @@ want_health() {
 want_health '{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "healthy"}' \
     "answers every service's status (node.md, Node controller, criterion 3)"
 
+# The owner sees the same through the API: nginx, the api, the socket and the
+# controller (decision #161).
+result=$(request node-health https://localhost/api/v1/node/health --header "@$work/authorization")
+[[ $result == "200 application/json" ]] ||
+    fail "GET /api/v1/node/health as the owner: expected 200 application/json, got $result: $(cat "$work/node-health.body")"
+got=$(python3 -c '
+import json, sys
+print(json.dumps({s["name"]: s["status"] for s in json.load(sys.stdin)["services"]}, sort_keys=True))
+' <"$work/node-health.body")
+want='{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "healthy"}'
+[[ $got == "$want" ]] || fail "GET /api/v1/node/health as the owner: expected $want, got $got"
+echo "ok: GET /api/v1/node/health answers the owner every service's status (node.md, Node controller, criterion 1)"
+
+# Without the controller the api answers 503 with its own problem type
+# (decision #159).
+compose stop controller >/dev/null 2>&1
+result=$(request node-health-down https://localhost/api/v1/node/health --header "@$work/authorization")
+type=$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("type"))' <"$work/node-health-down.body")
+[[ "$result $type" == "503 application/problem+json urn:titan:problem:controller-unavailable" ]] ||
+    fail "GET /api/v1/node/health without the controller: expected 503 controller-unavailable, got $result $type"
+echo "ok: GET /api/v1/node/health without the controller answers 503 controller-unavailable"
+compose start controller >/dev/null 2>&1
+# The controller needs a moment to create its socket again.
+for _ in {1..10}; do controller_health >/dev/null 2>&1 && break; sleep 1; done
+
 # nginx is the last check's to break: nothing below goes through it.
 compose stop nginx >/dev/null 2>&1
 want_health '{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "down"}' \
