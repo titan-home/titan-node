@@ -8,3 +8,15 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+  - package-ecosystem: docker-compose
+    directory: /node
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
