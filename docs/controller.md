@@ -38,10 +38,12 @@ with 64 MB of memory.
 
 ### `GET /health`
 
-The status of every service of the node's stack, read from
+The status of every service of the node's stack, sorted by name. The
+controller compares the services the stack should have,
+`docker compose config --format json`, with their containers,
 `docker compose ps --all --format json`
-([decision #155](../shared/docs/decisions/README.md#register)), in the order
-compose lists them.
+([decision #155](../shared/docs/decisions/README.md#register)). A container
+of a service that is no longer in the compose file is left out.
 
 `200`, `application/json`:
 
@@ -57,7 +59,8 @@ compose lists them.
 }
 ```
 
-With no containers, `services` is an empty list: `{"services":[]}`.
+A service without a container is `down`. With no services in the compose
+file, `services` is an empty list: `{"services":[]}`.
 
 `502`, `application/json`, when `docker compose` fails or its output cannot
 be read. The message is short and fixed; it never carries compose's or the
@@ -70,7 +73,8 @@ parser's error, which go to the controller's log.
 ### Statuses
 
 A status comes from the container's state, its healthcheck and its exit code
-as compose reports them.
+as compose reports them, and from the service's `restart` policy in the
+compose file.
 
 | Status | Meaning | From compose |
 |---|---|---|
@@ -78,8 +82,8 @@ as compose reports them.
 | `running` | Running, and it has no healthcheck | `State` `running`, `Health` empty |
 | `starting` | Running, and its healthcheck has not passed yet | `State` `running`, `Health` `starting` |
 | `unhealthy` | Running, and its healthcheck fails | `State` `running`, `Health` `unhealthy` |
-| `done` | A one-off service, such as `migrate`, finished | `State` `exited`, `ExitCode` 0 |
-| `down` | Not running as it should | `exited` with another code, `restarting`, `dead`, `created`, `paused` or `removing` |
+| `done` | A one-off service, such as `migrate`, finished | `State` `exited`, `ExitCode` 0, and `restart` not `always` or `unless-stopped` |
+| `down` | Not running as it should | No container; `exited` with 0 while `restart` is `always` or `unless-stopped`; `exited` with another code, `restarting`, `dead`, `created`, `paused` or `removing` |
 | `unknown` | A state or health the controller does not know, such as one a newer Docker adds | Anything else |
 
 ## Configuration

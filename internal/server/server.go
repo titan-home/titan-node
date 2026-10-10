@@ -12,17 +12,23 @@ import (
 )
 
 // Health answers GET /health with every service of the node's stack and its
-// status, read from `docker compose ps` through runner.
+// status, read from `docker compose config` and `docker compose ps`
+// through runner.
 func Health(runner compose.Runner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		output, err := runner.Run(r.Context(), "ps", "--all", "--format", "json")
+		config, err := runner.Run(r.Context(), "config", "--format", "json")
+		if err != nil {
+			badGateway(w, "docker compose config failed", err)
+			return
+		}
+		ps, err := runner.Run(r.Context(), "ps", "--all", "--format", "json")
 		if err != nil {
 			badGateway(w, "docker compose ps failed", err)
 			return
 		}
-		services, err := health.Parse(output)
+		services, err := health.Parse(config, ps)
 		if err != nil {
-			badGateway(w, "docker compose ps printed what the controller cannot read", err)
+			badGateway(w, "docker compose printed what the controller cannot read", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string][]health.Service{"services": services})

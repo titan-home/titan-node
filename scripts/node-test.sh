@@ -332,7 +332,9 @@ services=$(python3 -c 'import json, sys; print(" ".join(sorted(json.loads(line)[
 echo "ok: docker compose ps runs inside the controller"
 
 # GET /health over the socket, from the api, the only container that shares it.
-compose exec -T api python -c '
+# Prints the services as JSON, {"name": "status"}, or fails.
+controller_health() {
+    compose exec -T api python -c '
 import http.client, socket
 
 class Connection(http.client.HTTPConnection):
@@ -347,15 +349,32 @@ response = connection.getresponse()
 print(response.status, response.getheader("Content-Type"))
 print(response.read().decode())
 ' >"$work/health" || fail "GET /health over the controller's socket: no answer"
-python3 -c '
+    python3 -c '
 import json, sys
 status = sys.stdin.readline().strip()
 body = sys.stdin.read()
 assert status == "200 application/json", f"expected 200 application/json, got {status}: {body}"
-services = {service["name"]: service["status"] for service in json.loads(body)["services"]}
-want = {"nginx": "healthy", "api": "healthy", "db": "healthy", "controller": "running", "migrate": "done"}
-assert services == want, f"expected {want}, got {services}"
+print(json.dumps({service["name"]: service["status"] for service in json.loads(body)["services"]}, sort_keys=True))
 ' <"$work/health" || fail "GET /health over the controller's socket: $(cat "$work/health")"
-echo "ok: GET /health over the controller's socket answers every service's status (node.md, Node controller, criterion 3)"
+}
+
+# want_health <expected services as JSON> <what the check shows>
+want_health() {
+    local got
+    got=$(controller_health)
+    [[ $got == "$1" ]] || fail "GET /health over the controller's socket $2: expected $1, got $got"
+    echo "ok: GET /health over the controller's socket $2"
+}
+
+want_health '{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "healthy"}' \
+    "answers every service's status (node.md, Node controller, criterion 3)"
+
+# nginx is the last check's to break: nothing below goes through it.
+compose stop nginx >/dev/null 2>&1
+want_health '{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "down"}' \
+    "shows a stopped service as down, not done"
+compose rm --force nginx >/dev/null 2>&1
+want_health '{"api": "healthy", "controller": "running", "db": "healthy", "migrate": "done", "nginx": "down"}' \
+    "shows a service without a container as down"
 
 echo "== The node test passed"
