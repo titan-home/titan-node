@@ -42,7 +42,7 @@ Beside `compose.yaml` the node folder holds what is not in git:
 | Path | What it is |
 |---|---|
 | `.env` | `TITAN_API_IMAGE`, `TITAN_ADMIN_IMAGE` and `TITAN_CONTROLLER_IMAGE`, the images; `TITAN_NODE_DIR`, the node folder's path; `DOCKER_GID`, the group of `/var/run/docker.sock`; optionally `TITAN_COMPOSE_PROJECT`, `titan` unless set |
-| `secrets/db_password`, `secrets/claude_token` | The secret store, owned by the controller's user `10002`, mode `0700`; the secrets are read through `*_FILE` variables (see [the controller](docs/controller.md#secret-store)) |
+| `secrets/db_password`, `secrets/token_key` | The secret store, owned by the controller's user `10002`, mode `0700`; the secrets are read through `*_FILE` variables (see [the controller](docs/controller.md#secret-store)) |
 | `tls/cert.pem`, `tls/key.pem` | The certificate and its key |
 
 ## Run the stack by hand
@@ -64,16 +64,16 @@ yet
    `TITAN_CONTROLLER_IMAGE=titan-controller:local`, `TITAN_NODE_DIR=/opt/titan`
    and `DOCKER_GID=` followed by the output of
    `stat -c %g /var/run/docker.sock`.
-4. As root, create the secret store, owned by the controller's user, with
-   the Claude token (or nothing) in it:
-   `install -d -o 10002 -g 10002 -m 0700 secrets` and
-   `install -o 10002 -g 10002 -m 0644 /dev/null secrets/claude_token`, then
-   write the token into that file.
-5. Create the other secrets: `docker compose run --rm --no-deps controller secrets init`.
+4. As root, create the secret store, owned by the controller's user:
+   `install -d -o 10002 -g 10002 -m 0700 secrets`.
+5. Create the secrets: `docker compose run --rm --no-deps controller secrets init`.
 6. Create `tls/` with mode `0700` and put the certificate and key in it,
    both readable (`0644`): nginx reads them as another user.
 7. Start the stack: `docker compose up --wait`.
 8. Create the owner: `docker compose run --rm migrate titan-admin create-owner`.
+9. Sign in from a device and set your Claude token there:
+   `titan claude-token set` reads it from standard input. Every user sets
+   their own ([decision #165](shared/docs/decisions/README.md#register)).
 
 The API answers on `https://<host name>/api/`. Stop the stack with
 `docker compose down`; `--volumes` also deletes the database.

@@ -106,7 +106,7 @@ docker compose run --rm --no-deps controller secrets init
 | Secret | What it is | Created by |
 |---|---|---|
 | `db_password` | The database password, read by db, api and migrate | `secrets init`: 32 random bytes in hex |
-| `claude_token` | The Claude token the api uses for now | Whoever installs the node |
+| `token_key` | The key that encrypts each user's Claude token in the database, read by the api ([decision #166](../shared/docs/decisions/README.md#register)) | `secrets init`: 32 random bytes in URL-safe base64 |
 
 A secret is written to a temporary file and linked into place, so an
 interrupted run leaves no half-written secret. Its value is never logged.
