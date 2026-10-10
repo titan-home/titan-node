@@ -139,7 +139,9 @@ reaches a recreated api. For the controller it checks that it has no
 network, its socket's owner and mode, that only the api mounts the socket
 and other users there are refused, `docker compose ps` from inside it, and
 `GET /health` over the socket from the api, with nginx running, then
-stopped, then removed. Its requests come over loopback,
+stopped, then removed. Through the API it checks that the owner sees the same
+at `/api/v1/node/health`, and that the api answers 503 while the controller
+is stopped. Its requests come over loopback,
 so it proves the mechanism of the client address; which address a real
 client has on a node reached over Tailscale is checked by hand before a
 release ([decision #82](shared/docs/decisions/README.md#register)). It needs
