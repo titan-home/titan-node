@@ -16,10 +16,8 @@ product, architecture and rules shared by every TITAN repository are in the
 ## Status
 
 Build-plan stage 4, in progress: the node's compose file, nginx with TLS and
-the node test exist. The controller has its skeleton: its socket, its image
-and its place in the stack; its health report is not written yet, so its
-tests and the node test's last check fail. See the
-[build plan](shared/docs/roadmap/plan.md) and
+the node test exist. The controller reports the services' health over its
+socket. See the [build plan](shared/docs/roadmap/plan.md) and
 [the controller](docs/controller.md).
 
 ## Layout
